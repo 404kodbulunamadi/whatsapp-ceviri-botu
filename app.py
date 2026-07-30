@@ -109,7 +109,7 @@ def process_audio(audio_id, sender_phone):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "llama3-70b-8192",
+                    "model": "openai/gpt-oss-120b",
                     "messages": [
                         {"role": "system", "content": "Sen profesyonel bir dil uzmanı ve eğitimcisin. Kullanıcının sana gönderdiği metni (özellikle İspanyolca veya Portekizce olabilir) en doğal, akıcı ve gramer açısından kusursuz bir Türkçeye çevir. Ekstra hiçbir açıklama veya yorum ekleme, sadece çeviriyi ver."},
                         {"role": "user", "content": transcribed_text}
