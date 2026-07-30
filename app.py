@@ -12,7 +12,9 @@ API_VERSION = "v25.0"  # Meta Panelindeki güncel Graph API sürümü
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 # ---------------
-
+@app.route('/ping', methods=['GET'])
+def ping():
+    return 'OK', 200
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     if request.method == 'GET':
