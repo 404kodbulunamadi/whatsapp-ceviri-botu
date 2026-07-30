@@ -7,6 +7,7 @@ app = Flask(__name__)
 # --- AYARLAR ---
 VERIFY_TOKEN = "BENIM_GIZLI_SIFREM"
 PHONE_NUMBER_ID = "1234105529794933"
+API_VERSION = "v25.0"  # Meta Panelindeki güncel Graph API sürümü
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
@@ -24,8 +25,8 @@ def webhook():
         return 'Hatalı Token', 403
         
     elif request.method == 'POST':
-        body = request.json
-        print("📩 YENİ BİLDİRİM GELDİ:", body, flush=True) # Anlık log takibi için
+        body = request.get_json(silent=True) or {}
+        print("📩 YENİ BİLDİRİM GELDİ:", body, flush=True)
         
         try:
             if body.get('object'):
@@ -56,24 +57,37 @@ def webhook():
 def process_audio(audio_id, sender_phone):
     try:
         print(f"🎙️ Ses işleniyor ID: {audio_id}", flush=True)
+        
+        # 1. Medya URL'sini Meta Graph API'den İsteme
         url_req = requests.get(
-            f"https://graph.facebook.com/v20.0/{audio_id}", 
+            f"https://graph.facebook.com/{API_VERSION}/{audio_id}", 
             headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
         )
-        media_url = url_req.json().get("url")
+        url_data = url_req.json()
+        media_url = url_data.get("url")
         
         if not media_url:
-            print("❌ Medya URL'si alınamadı!", url_req.json(), flush=True)
+            print("❌ Medya URL'si alınamadı! Yanıt:", url_data, flush=True)
             return
 
+        # 2. Ses Dosyasını İndirme (User-Agent ile Meta engellerini aşma)
         audio_req = requests.get(
             media_url, 
-            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+            headers={
+                "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            }
         )
+        
+        if audio_req.status_code != 200:
+            print(f"❌ Ses dosyası indirilemedi! Status Code: {audio_req.status_code}", flush=True)
+            return
+
         file_path = "temp_audio.ogg"
         with open(file_path, "wb") as f:
             f.write(audio_req.content)
             
+        # 3. Groq Whisper ile Sesi Metne Çevirme
         with open(file_path, "rb") as f:
             transcribe_res = requests.post(
                 "https://api.groq.com/openai/v1/audio/transcriptions",
@@ -82,9 +96,11 @@ def process_audio(audio_id, sender_phone):
                 data={"model": "whisper-large-v3"}
             )
         
-        transcribed_text = transcribe_res.json().get("text", "")
+        transcribe_json = transcribe_res.json()
+        transcribed_text = transcribe_json.get("text", "")
         print(f"📝 Deşifre Metin: {transcribed_text}", flush=True)
         
+        # 4. Metni Llama 3 ile Türkçeye Çevirme
         if transcribed_text:
             translate_res = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -100,8 +116,14 @@ def process_audio(audio_id, sender_phone):
                     ]
                 }
             )
-            turkish_text = translate_res.json()["choices"][0]["message"]["content"]
-            final_message = f"🗣️ *Orijinal Metin:*\n_{transcribed_text}_\n\n🇹🇷 *Çeviri:*\n*{turkish_text}*"
+            translate_json = translate_res.json()
+            
+            if "choices" in translate_json and len(translate_json["choices"]) > 0:
+                turkish_text = translate_json["choices"][0]["message"]["content"]
+                final_message = f"🗣️ *Orijinal Metin:*\n_{transcribed_text}_\n\n🇹🇷 *Çeviri:*\n*{turkish_text}*"
+            else:
+                print("❌ Groq Çeviri Hatası:", translate_json, flush=True)
+                final_message = "⚠️ Çeviri yapılırken bir API hatası oluştu."
         else:
             final_message = "❌ Seste herhangi bir konuşma algılayamadım."
             
@@ -113,7 +135,7 @@ def process_audio(audio_id, sender_phone):
         send_message(sender_phone, "⚠️ Çeviri motorunda bir hata oluştu, lütfen daha sonra tekrar dene.")
 
 def send_message(to, text):
-    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    url = f"https://graph.facebook.com/{API_VERSION}/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
@@ -124,7 +146,9 @@ def send_message(to, text):
         "type": "text",
         "text": {"body": text}
     }
-    requests.post(url, headers=headers, json=data)
+    res = requests.post(url, headers=headers, json=data)
+    if res.status_code != 200:
+        print("❌ Mesaj gönderme hatası:", res.json(), flush=True)
 
 if __name__ == '__main__':
     app.run(port=5000)
